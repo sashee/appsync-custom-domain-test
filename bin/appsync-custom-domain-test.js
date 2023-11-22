@@ -32,8 +32,8 @@ const dnsValidatedCertificate = new aws_certificatemanager.DnsValidatedCertifica
 });
 
 const appsyncDomain = new aws_appsync.CfnDomainName(stack1, "AppSyncDomain", {
-	//certificateArn: dnsValidatedCertificate.certificateArn,
-	certificateArn: crossRegionCertificate.certificateArn,
+	certificateArn: dnsValidatedCertificate.certificateArn,
+	//certificateArn: crossRegionCertificate.certificateArn,
 	domainName: "api." + domain,
 });
 
