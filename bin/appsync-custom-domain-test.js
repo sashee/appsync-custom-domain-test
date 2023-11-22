@@ -1,21 +1,55 @@
 #!/usr/bin/env node
 
-const cdk = require('aws-cdk-lib');
-const { AppsyncCustomDomainTestStack } = require('../lib/appsync-custom-domain-test-stack');
+import cdk, {aws_appsync, aws_certificatemanager, aws_route53} from "aws-cdk-lib";
+import { Route53Client, GetHostedZoneCommand } from "@aws-sdk/client-route-53";
+
+const hostedZoneId = process.env.HOSTED_ZONE_ID;
+const domain = await (async () => {
+	const res = await new Route53Client().send(new GetHostedZoneCommand({Id: hostedZoneId}));
+	return res.HostedZone.Name.replace(/\.$/, "");
+})();
+
+console.log(hostedZoneId, domain);
 
 const app = new cdk.App();
-new AppsyncCustomDomainTestStack(app, 'AppsyncCustomDomainTestStack', {
-  /* If you don't specify 'env', this stack will be environment-agnostic.
-   * Account/Region-dependent features and context lookups will not work,
-   * but a single synthesized template can be deployed anywhere. */
+const stack1 = new cdk.Stack(app, "Stack1", {env: {region: "eu-west-1"}, crossRegionReferences: true});
+const stack2 = new cdk.Stack(app, "Stack2", {env: {region: "us-east-1"}, crossRegionReferences: true});
 
-  /* Uncomment the next line to specialize this stack for the AWS Account
-   * and Region that are implied by the current CLI configuration. */
-  // env: { account: process.env.CDK_DEFAULT_ACCOUNT, region: process.env.CDK_DEFAULT_REGION },
+const hostedZoneStack2 = aws_route53.HostedZone.fromHostedZoneAttributes(stack2, "HostedZone", {hostedZoneId: hostedZoneId, zoneName: domain});
 
-  /* Uncomment the next line if you know exactly what Account and Region you
-   * want to deploy the stack to. */
-  // env: { account: '123456789012', region: 'us-east-1' },
-
-  /* For more information, see https://docs.aws.amazon.com/cdk/latest/guide/environments.html */
+const crossRegionCertificate = new aws_certificatemanager.Certificate(stack2, 'crossRegionCertificate', {
+	domainName: "api." + domain,
+	validation: aws_certificatemanager.CertificateValidation.fromDns(hostedZoneStack2),
 });
+
+const hostedZoneStack1 = aws_route53.HostedZone.fromHostedZoneAttributes(stack1, "HostedZone", {hostedZoneId: hostedZoneId, zoneName: domain});
+
+const dnsValidatedCertificate = new aws_certificatemanager.DnsValidatedCertificate(stack1, "DnsValidatedCertificate", {
+	domainName: "api." + domain,
+	hostedZone: hostedZoneStack1,
+	region: "us-east-1",
+	validation: aws_certificatemanager.CertificateValidation.fromDns(hostedZoneStack1),
+});
+
+const appsyncDomain = new aws_appsync.CfnDomainName(stack1, "AppSyncDomain", {
+	//certificateArn: dnsValidatedCertificate.certificateArn,
+	certificateArn: crossRegionCertificate.certificateArn,
+	domainName: "api." + domain,
+});
+
+const appsyncApi = new aws_appsync.CfnGraphQLApi(stack1, "AppSyncApi", {
+	authenticationType: "API_KEY",
+	name: "testing",
+});
+
+new aws_appsync.CfnDomainNameApiAssociation(stack1, "AppSyncDomainAssociation", {
+	apiId: appsyncApi.attrApiId,
+	domainName: appsyncDomain.attrDomainName,
+});
+
+new aws_route53.CnameRecord(stack1, "Cname", {
+	recordName: "api",
+	zone: hostedZoneStack1,
+	domainName: appsyncDomain.attrAppSyncDomainName,
+})
+
